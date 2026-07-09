@@ -855,3 +855,140 @@ def get_market_depth(instrument_key: str) -> dict | None:
         "oi": int(entry.get("oi", 0)),
         "volume": int(entry.get("volume", 0)),
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+#  MARGIN CALCULATION
+# ══════════════════════════════════════════════════════════════════
+
+def get_order_margin(symbol: str, expiry: str, legs: list[dict]) -> dict | None:
+    """
+    Calculate margin required for an order (single or multi-leg spread).
+    Does NOT place any order — just returns the margin estimate.
+
+    Args:
+        symbol: NIFTY, BANKNIFTY, etc.
+        expiry: YYYY-MM-DD
+        legs: list of dicts with keys:
+            strike (int), option_type (CE/PE),
+            action (BUY/SELL), quantity (in lots)
+
+    Returns: dict with required_margin, final_margin, source.
+
+    Example:
+        # Naked buy
+        get_order_margin("NIFTY", "2026-07-15", [
+            {"strike": 24000, "option_type": "CE", "action": "BUY", "quantity": 1}
+        ])
+        # Bull call spread
+        get_order_margin("NIFTY", "2026-07-15", [
+            {"strike": 24000, "option_type": "CE", "action": "BUY", "quantity": 1},
+            {"strike": 24200, "option_type": "CE", "action": "SELL", "quantity": 1},
+        ])
+    """
+    chain = get_option_chain(symbol, expiry)
+    if not chain or not chain.get("chain"):
+        return _margin_fallback(symbol, legs)
+
+    lot_size = chain.get("lot_size", LOT_SIZES.get(symbol, 50))
+    instruments = []
+
+    for leg in legs:
+        ikey = _find_instrument_key(chain["chain"], leg["strike"], leg["option_type"])
+        if not ikey:
+            return _margin_fallback(symbol, legs)
+
+        ltp = _find_ltp(chain["chain"], leg["strike"], leg["option_type"])
+        instruments.append({
+            "instrument_key": ikey,
+            "quantity": leg["quantity"] * lot_size,
+            "transaction_type": leg["action"],
+            "product": "D",
+            "price": ltp or 0,
+        })
+
+    data = _post(f"{_BASE}/charges/margin", {"instruments": instruments})
+    if not data:
+        return _margin_fallback(symbol, legs)
+
+    required = float(data.get("required_margin", 0) or 0)
+    final = float(data.get("final_margin", 0) or 0)
+
+    if final <= 0:
+        return _margin_fallback(symbol, legs)
+
+    return {
+        "required_margin": round(required, 2),
+        "final_margin": round(final, 2),
+        "source": "UPSTOX_API",
+    }
+
+
+def _find_instrument_key(chain: list, strike: int, option_type: str) -> str:
+    for row in chain:
+        if row["strike"] == strike:
+            return row.get(option_type, {}).get("instrument_key", "")
+    return ""
+
+
+def _find_ltp(chain: list, strike: int, option_type: str) -> float:
+    for row in chain:
+        if row["strike"] == strike:
+            return row.get(option_type, {}).get("ltp", 0)
+    return 0
+
+
+_MARGIN_FALLBACK = {
+    "BANKNIFTY": 46_000,
+    "NIFTY": 42_000,
+}
+
+
+def _margin_fallback(symbol: str, legs: list) -> dict:
+    has_sell = any(l["action"] == "SELL" for l in legs)
+    if has_sell and len(legs) >= 2:
+        est = _MARGIN_FALLBACK.get(symbol, 46_000)
+    elif has_sell:
+        est = 175_000 if symbol == "BANKNIFTY" else 155_000
+    else:
+        est = 15_000
+    return {
+        "required_margin": est,
+        "final_margin": est,
+        "source": "FALLBACK_ESTIMATE",
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+#  BROKERAGE / CHARGES
+# ══════════════════════════════════════════════════════════════════
+
+def get_brokerage(instrument_key: str, quantity: int,
+                  product: str, transaction_type: str,
+                  price: float) -> dict | None:
+    """
+    Get real brokerage + charges breakdown for a trade.
+    Returns: brokerage, STT, stamp duty, exchange charges, GST, SEBI fees, etc.
+    Does NOT place any order.
+
+    Args:
+        instrument_key: e.g. "NSE_FO|51834" (get from option chain)
+        quantity: number of shares (not lots — multiply by lot_size)
+        product: "D" (intraday) or "I" (delivery)
+        transaction_type: "BUY" or "SELL"
+        price: expected trade price
+
+    Example:
+        chain = get_option_chain("NIFTY", "2026-07-15")
+        atm = [r for r in chain["chain"] if r["is_atm"]][0]
+        ikey = atm["CE"]["instrument_key"]
+        charges = get_brokerage(ikey, 75, "D", "BUY", atm["CE"]["ltp"])
+    """
+    params = {
+        "instrument_token": instrument_key,
+        "quantity": quantity,
+        "product": product,
+        "transaction_type": transaction_type,
+        "price": price,
+    }
+    return _get(f"{_BASE}/charges/brokerage", params, timeout=10)

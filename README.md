@@ -81,6 +81,10 @@ python sentiment.py        # VIX, PCR, FII/DII, max pain, OI
 - `get_dii_activity()` — DII buy/sell/net in crores
 - `get_market_holidays()` — NSE holidays for the year
 
+### Margin & Charges (no order placed)
+- `get_order_margin(symbol, expiry, legs)` — Real margin for single or multi-leg orders
+- `get_brokerage(instrument_key, qty, product, txn_type, price)` — Brokerage + STT + stamp duty + all charges
+
 ### WebSocket
 - `MarketStreamer` — Real-time ticks with auto-reconnect
   - Modes: `ltpc` (LTP only), `full` (depth + OI), `option_greeks` (Greeks + IV)
