@@ -1,0 +1,4 @@
+requests
+pandas
+upstox-python-sdk
+python-dotenv
