@@ -69,12 +69,18 @@ class PaperBroker:
         self._order_counter = 0
         self._lock = threading.RLock()
 
+        self._heartbeat = None
         self._persist_dir = Path(persist_dir) if persist_dir else Path("data")
         self._positions_file = self._persist_dir / "positions.json"
         self._load_positions()
 
         log.info("Paper broker | Capital: INR %s | Max lots: %d",
                  f"{capital:,.0f}", max_lots)
+
+    def set_heartbeat(self, heartbeat) -> None:
+        """Connect a DataHeartbeat for automatic bid/ask depth on order fills."""
+        self._heartbeat = heartbeat
+        log.info("Paper broker: heartbeat connected — using live bid/ask for fills")
 
     # ── Properties ───────────────────────────────────────────────
 
@@ -137,6 +143,14 @@ class PaperBroker:
         now = _now_ist()
         lot_size = LOT_SIZES.get(symbol, 50)
         total_qty = quantity * lot_size
+
+        if not depth_hint and self._heartbeat and instrument_key:
+            ws_depth = self._heartbeat.get_depth(instrument_key)
+            if ws_depth:
+                depth_hint = {"bid": ws_depth["bid"], "ask": ws_depth["ask"]}
+                log.info("Auto depth from WS | %s bid=%.2f ask=%.2f (age=%.1fs)",
+                         instrument_key, ws_depth["bid"], ws_depth["ask"],
+                         ws_depth["age_seconds"])
 
         # Validations
         freeze = _FREEZE_QTY.get(symbol, 1800)
@@ -323,8 +337,17 @@ class PaperBroker:
         raw_exit = exit_price_override or pos.get("current_price", pos["entry_price"])
 
         reverse_action = "SELL" if pos["action"] == "BUY" else "BUY"
+
+        depth = None
+        inst_key = pos.get("instrument_key")
+        if self._heartbeat and inst_key:
+            ws_depth = self._heartbeat.get_depth(inst_key)
+            if ws_depth:
+                depth = {"bid": ws_depth["bid"], "ask": ws_depth["ask"]}
+
         exit_price = apply_slippage(
             raw_exit, reverse_action,
+            depth=depth,
             symbol=pos["symbol"],
             hour=now.hour,
             is_exit=True,

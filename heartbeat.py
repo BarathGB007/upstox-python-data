@@ -34,6 +34,7 @@ class DataHeartbeat:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._ltp_cache: dict = {}
+        self._depth_cache: dict = {}
         self._tick_history: dict = {}
         self._callbacks: list[Callable] = []
         self._websocket = None
@@ -89,6 +90,19 @@ class DataHeartbeat:
         """Get LTP for all tracked symbols."""
         return {sym: self.get_ltp(sym) for sym in self.symbols}
 
+    def get_depth(self, instrument_key: str) -> dict | None:
+        """Get cached bid/ask for an instrument key (from WebSocket full mode)."""
+        with self._lock:
+            entry = self._depth_cache.get(instrument_key)
+            if not entry:
+                return None
+            now = datetime.now(IST)
+            age = (now - entry["timestamp"]).total_seconds()
+            if age > 30:
+                return None
+            return {"bid": entry["bid"], "ask": entry["ask"],
+                    "age_seconds": round(age, 1)}
+
     def get_tick_history(self, symbol: str, minutes: int = 3) -> list[tuple]:
         """Get recent tick history as [(timestamp, ltp), ...]."""
         with self._lock:
@@ -130,6 +144,15 @@ class DataHeartbeat:
             return
 
         now = datetime.now(IST)
+
+        bid = tick.get("bid", 0)
+        ask = tick.get("ask", 0)
+        if bid and ask and bid > 0 and ask > 0:
+            with self._lock:
+                self._depth_cache[key] = {
+                    "bid": bid, "ask": ask, "timestamp": now,
+                }
+
         sym = self._key_to_symbol(key)
         if sym:
             with self._lock:
