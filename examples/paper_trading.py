@@ -32,15 +32,16 @@ if not atm_row:
     sys.exit(1)
 
 strike = atm_row["strike"]
-ce_ltp = atm_row["CE"]["ltp"]
-pe_ltp = atm_row["PE"]["ltp"]
+ce = atm_row["CE"]
+pe = atm_row["PE"]
 
 print(f"ATM strike: {strike}")
-print(f"  CE LTP: {ce_ltp:.2f}  |  PE LTP: {pe_ltp:.2f}")
+print(f"  CE: LTP={ce['ltp']:.2f}  bid={ce.get('bid', 'N/A')}  ask={ce.get('ask', 'N/A')}")
+print(f"  PE: LTP={pe['ltp']:.2f}  bid={pe.get('bid', 'N/A')}  ask={pe.get('ask', 'N/A')}")
 
-# 2. Place a BUY order
+# 2. Place a BUY order with real bid/ask depth
 print(f"\n{'─' * 60}")
-print("Placing BUY order: 1 lot NIFTY CE...")
+print("Placing BUY order: 1 lot NIFTY CE (filling at ask, not LTP)...")
 result = broker.place_order(
     symbol="NIFTY",
     expiry=expiry,
@@ -48,13 +49,14 @@ result = broker.place_order(
     option_type="CE",
     action="BUY",
     quantity=1,
-    option_ltp_hint=ce_ltp,
+    option_ltp_hint=ce["ltp"],
+    depth_hint={"bid": ce.get("bid", 0), "ask": ce.get("ask", 0)},
     reason="demo trade",
 )
 print(f"  Status: {result['status']}")
 if result["status"] == "SUCCESS":
     print(f"  Position: {result['position_id']}")
-    print(f"  Fill price: {result['entry_price']:.2f} (LTP was {ce_ltp:.2f})")
+    print(f"  Fill price: {result['entry_price']:.2f} (LTP was {ce['ltp']:.2f}, ask was {ce.get('ask', 'N/A')})")
     print(f"  Margin used: INR {result['margin_used']:,.2f}")
 
     # 3. Set stop loss and target
@@ -62,7 +64,7 @@ if result["status"] == "SUCCESS":
     print(f"\n  SL: {sl_result['stop_loss']:.2f}  |  Target: {sl_result['target']:.2f}")
 
     # 4. Simulate price update
-    new_price = ce_ltp * 1.05
+    new_price = ce["ltp"] * 1.05
     broker.update_price(result["position_id"], new_price)
     print(f"\n  Price updated to {new_price:.2f}")
 
