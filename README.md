@@ -141,6 +141,96 @@ For WebSocket ticks on stocks:
 ws.subscribe(["NSE_EQ|INE002A01018"], mode="full")  # RELIANCE live ticks
 ```
 
+## Integrating with your algo
+
+This is a data layer — plug it into whatever strategy you're building. Some ideas:
+
+### Signal generation
+```python
+from upstox_data import fetch_intraday_candles, get_spot
+import pandas as pd
+
+# Compute RSI on live 5-min candles
+df = fetch_intraday_candles("NIFTY", days=1, interval_min=5)
+delta = df["close"].diff()
+gain = delta.where(delta > 0, 0).rolling(14).mean()
+loss = -delta.where(delta < 0, 0).rolling(14).mean()
+rsi = 100 - (100 / (1 + gain / loss))
+print(f"Current RSI(14): {rsi.iloc[-1]:.1f}")
+```
+
+### Entry/exit with WebSocket ticks
+```python
+from upstox_websocket import MarketStreamer
+from upstox_data import INSTRUMENT_KEYS
+
+def strategy_tick(tick):
+    ltp = tick.get("ltp", 0)
+    # Your logic here — crossover, breakout, mean reversion, etc.
+    if ltp > your_entry_level:
+        place_order(...)  # Use your own broker's order API
+
+ws = MarketStreamer(on_tick=strategy_tick)
+ws.start()
+ws.subscribe([INSTRUMENT_KEYS["NIFTY"]], mode="full")
+```
+
+### Option strategy screening
+```python
+from upstox_data import get_option_chain, get_nearest_expiry
+
+chain = get_option_chain("NIFTY", get_nearest_expiry("NIFTY"))
+for row in chain["chain"]:
+    ce, pe = row["CE"], row["PE"]
+    # Find high IV strikes for selling
+    if ce["iv"] > 15 and ce["oi"] > 1_000_000:
+        print(f"CE {row['strike']}: IV={ce['iv']}% OI={ce['oi']:,} spread={ce['spread_pct']:.1f}%")
+    # Find cheap PE hedges
+    if pe["ltp"] < 10 and pe["delta"] > -0.15:
+        print(f"Cheap PE hedge: {row['strike']} @ {pe['ltp']}")
+```
+
+### Sentiment-based filters
+```python
+from upstox_data import get_vix, get_fii_activity, get_pcr, get_nearest_expiry
+
+vix = get_vix()
+fii = get_fii_activity()
+pcr = get_pcr("NIFTY", get_nearest_expiry("NIFTY"))
+
+# Simple regime filter
+if vix > 20 and fii["net_amount"] < -1000:
+    print("High vol + FII selling — avoid naked longs")
+elif vix < 13 and pcr["pcr"] > 1.2:
+    print("Low vol + high PCR — bullish setup")
+```
+
+### Spike detection with heartbeat
+```python
+from heartbeat import DataHeartbeat
+
+hb = DataHeartbeat(symbols=["NIFTY", "BANKNIFTY"], interval=5)
+hb.start()
+
+# Check for sudden moves
+spike = hb.check_spike("NIFTY", threshold_pct=0.3, window_min=2)
+if spike["spike"]:
+    print(f"NIFTY spike {spike['direction']} {spike['move_pct']:.2f}% in 2 min")
+```
+
+### Backtesting with historical candles
+```python
+from upstox_data import fetch_daily_candles
+
+df = fetch_daily_candles("BANKNIFTY", days=365)
+# Compute your indicators, run your strategy, track P&L
+df["sma_20"] = df["close"].rolling(20).mean()
+df["sma_50"] = df["close"].rolling(50).mean()
+df["signal"] = (df["sma_20"] > df["sma_50"]).astype(int)
+crossovers = df["signal"].diff().abs().sum()
+print(f"Golden/death crosses in 1 year: {int(crossovers)}")
+```
+
 ## Notes
 
 - **Token:** Uses Upstox analytics token — long-lived, no OAuth refresh needed. Just paste in `.env`
