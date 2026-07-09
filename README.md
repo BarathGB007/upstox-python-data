@@ -101,6 +101,46 @@ python sentiment.py        # VIX, PCR, FII/DII, max pain, OI
 | FINNIFTY | `NSE_INDEX\|Nifty Fin Service` | Monthly expiry |
 | VIX | `NSE_INDEX\|India VIX` | No options |
 
+## Adding stocks
+
+The code works with any NSE instrument — just add the instrument key to the `INSTRUMENT_KEYS` dict in `upstox_data.py`:
+
+```python
+INSTRUMENT_KEYS = {
+    "NIFTY":     "NSE_INDEX|Nifty 50",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    # Add stocks:
+    "RELIANCE":  "NSE_EQ|INE002A01018",
+    "TCS":       "NSE_EQ|INE467B01029",
+    "HDFCBANK":  "NSE_EQ|INE040A01034",
+    "INFY":      "NSE_EQ|INE009A01021",
+    "SBIN":      "NSE_EQ|INE062A01020",
+}
+```
+
+**Finding instrument keys:** The format is `NSE_EQ|<ISIN>` for stocks. You can find the ISIN on the [NSE website](https://www.nseindia.com) — search the stock and look for ISIN in the details.
+
+For stock F&O options, also add the strike step and lot size:
+
+```python
+STRIKE_STEP = {"NIFTY": 50, "BANKNIFTY": 100, "RELIANCE": 20, "TCS": 50}
+LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30, "RELIANCE": 250, "TCS": 150}
+```
+
+Then use the same functions:
+
+```python
+spot = get_spot("RELIANCE")
+chain = get_option_chain("RELIANCE", "2026-07-31")
+df = fetch_daily_candles("RELIANCE", days=90)
+```
+
+For WebSocket ticks on stocks:
+
+```python
+ws.subscribe(["NSE_EQ|INE002A01018"], mode="full")  # RELIANCE live ticks
+```
+
 ## Notes
 
 - **Token:** Uses Upstox analytics token — long-lived, no OAuth refresh needed. Just paste in `.env`
