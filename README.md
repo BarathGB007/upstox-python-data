@@ -11,6 +11,9 @@ Built for my algo trading project. Sharing because half the sub is stuck at "how
 | `upstox_data.py` | REST API — spot, option chains, candles, VIX, FII/DII, PCR, max pain, OI |
 | `upstox_websocket.py` | WebSocket — real-time LTP, bid/ask depth, option Greeks via protobuf |
 | `heartbeat.py` | Background LTP poller with WebSocket integration + spike detection |
+| `paper_broker.py` | Simulated broker — realistic slippage, NSE costs, position tracking, spreads |
+| `slippage.py` | Slippage model — depth-based (bid/ask) + formula fallback |
+| `costs.py` | NSE F&O charge calculator — brokerage, STT, exchange txn, SEBI, stamp, GST |
 | `examples/` | Ready-to-run scripts for each feature |
 
 ## Setup
@@ -50,6 +53,7 @@ python option_chain.py     # Full chain with IV, Greeks, OI
 python live_ticks.py       # WebSocket real-time ticks
 python candles.py          # Daily + intraday OHLCV candles
 python sentiment.py        # VIX, PCR, FII/DII, max pain, OI
+python paper_trading.py    # Simulated order with slippage + costs
 ```
 
 ## Available functions
@@ -95,6 +99,16 @@ python sentiment.py        # VIX, PCR, FII/DII, max pain, OI
   - `get_ltp(symbol)` — Instant cached LTP
   - `check_spike(symbol)` — Detect price moves over time window
   - `register_callback(fn)` — Get notified on every tick
+
+### Paper Broker
+- `PaperBroker(capital, max_lots, max_positions)` — Simulated order execution
+  - `place_order(...)` — Fill at slipped price with margin validation
+  - `place_spread(...)` — Multi-leg spread with atomic rollback
+  - `close_position(id, reason)` — Close with exit slippage + full cost breakdown
+  - `update_price(id, ltp)` — Update MFE/MAE tracking from live ticks
+  - `set_sl_target(id, sl_pct, target_pct)` — Attach stop loss + target
+  - `get_portfolio()` — Full snapshot: positions, P&L, capital, lot usage
+  - Positions persist to `data/positions.json` across restarts
 
 ## Supported symbols
 
@@ -235,6 +249,47 @@ crossovers = df["signal"].diff().abs().sum()
 print(f"Golden/death crosses in 1 year: {int(crossovers)}")
 ```
 
+### Realistic paper trading
+```python
+from paper_broker import PaperBroker
+from upstox_data import get_spot, get_option_chain, get_nearest_expiry
+from upstox_websocket import MarketStreamer
+
+broker = PaperBroker(capital=500_000, max_lots=5)
+
+# Place an order with realistic fill
+chain = get_option_chain("NIFTY", get_nearest_expiry("NIFTY"))
+atm = next(r for r in chain["chain"] if r["is_atm"])
+result = broker.place_order(
+    symbol="NIFTY", expiry=chain["expiry"],
+    strike=atm["strike"], option_type="CE", action="BUY", quantity=1,
+    option_ltp_hint=atm["CE"]["ltp"],
+    depth_hint={"bid": atm["CE"]["bid"], "ask": atm["CE"]["ask"]},  # real bid/ask
+)
+
+# Stream ticks to update position MFE/MAE
+def on_tick(tick):
+    for pos_id, pos in broker.positions.items():
+        if tick.get("instrument_key") == pos.get("instrument_key"):
+            broker.update_price(pos_id, tick["ltp"])
+            # Auto SL/target check
+            sl_info = broker.get_sl_targets().get(pos_id)
+            if sl_info and tick["ltp"] <= sl_info["stop_loss"]:
+                broker.close_position(pos_id, "stop loss hit")
+
+ws = MarketStreamer(on_tick=on_tick)
+ws.start()
+```
+
+**Why this beats LTP-based paper trading:**
+- **Fills at bid/ask** — BUY fills at ask, SELL at bid, not mid-price
+- **Slippage model** — wider for OTM, high VIX, open/close, illiquid symbols
+- **Full NSE costs** — brokerage, STT, exchange txn, SEBI, stamp duty, GST
+- **MFE/MAE tracking** — know your max favorable/adverse excursion per trade
+- **Spread support** — multi-leg orders with atomic rollback on partial fills
+- **Margin validation** — per-trade and total capital limits enforced
+- **Position persistence** — survives restarts via JSON state file
+
 ## Notes
 
 - **Token:** Uses Upstox analytics token — long-lived, no OAuth refresh needed. Just paste in `.env`
@@ -242,7 +297,7 @@ print(f"Golden/death crosses in 1 year: {int(crossovers)}")
 - **Rate limits:** Built-in retry with exponential backoff for 429/5xx errors
 - **v3 candle limits:** 1-15min candles go back 30 days, 30min up to 90 days
 - **Daily candles** do NOT include today — use `get_spot()` for live price
-- This is a data layer only — no order placement, no trading logic
+- Includes paper broker for simulated trading — no real orders are placed
 
 ## License
 
